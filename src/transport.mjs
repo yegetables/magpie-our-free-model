@@ -1,6 +1,6 @@
 import { guardToolResponse } from '../vendor/zen-free/tool-response.mjs';
 import { collapseResponse } from '../vendor/zen-free/stream.mjs';
-import { normalizeResponse } from './response.mjs';
+import { normalizeResponse, withRetryAfter } from './response.mjs';
 
 export function baseURL(value, loopback = false) {
   const url = new URL(value);
@@ -72,7 +72,7 @@ export async function forwardChat(request, body, { key, publicLane = false } = {
       h.set('X-Magpie-Sign-In', 'kept');
       return new Response(response.body, { status: response.status, headers: h });
     }
-    return response;
+    return withRetryAfter(response);
   }
   const names = new Set((body.tools ?? []).map(t => t?.function?.name).filter(n => typeof n === 'string'));
   for (const t of body.functions ?? []) if (typeof t?.name === 'string') names.add(t.name);

@@ -42,3 +42,31 @@ export async function normalizeResponse(response) {
   }, { highWaterMark: 0 });
   return new Response(stream, { status: response.status, statusText: response.statusText, headers });
 }
+
+/**
+ * A 429 handed back with the reset time it already names.
+ *
+ * The service keeps the upstream's time in the body (`providerRetryAfterMs`,
+ * from the vendored forwarder) instead of putting it on a `Retry-After`
+ * header, so a caller such as magpie rests the provider for the vendor's own
+ * time rather than its default. A response that already carries the header,
+ * or names no usable time, is passed on exactly as it came, unread.
+ */
+export async function withRetryAfter(response) {
+  if (response.status !== 429 || response.headers.get('retry-after')) return response;
+  const text = await response.clone().text().catch(() => '');
+  let ms = 0;
+  try {
+    const body = JSON.parse(text);
+    ms = body?.providerRetryAfterMs ?? body?.error?.providerRetryAfterMs ??
+      body?.error?.retry_after_ms ?? body?.failure?.providerRetryAfterMs ?? 0;
+  } catch {
+    // not JSON: nothing to read
+  }
+  const seconds = Number(ms) > 0 && Number.isFinite(Number(ms)) ? Math.max(1, Math.ceil(Number(ms) / 1000)) : 0;
+  if (seconds === 0) return response;
+  const headers = new Headers(response.headers);
+  headers.set('retry-after', String(seconds));
+  headers.delete('content-length');
+  return new Response(text, { status: response.status, statusText: response.statusText, headers });
+}

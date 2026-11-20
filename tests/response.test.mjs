@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeResponse } from '../src/response.mjs';
+import { normalizeResponse, withRetryAfter } from '../src/response.mjs';
 
 function fragmented(parts, onCancel = () => {}) {
   let index = 0;
@@ -39,4 +39,23 @@ test('HTTP errors pass through unchanged and unread', async () => {
   const original = new Response('{"error":"limited"}', { status: 429 });
   assert.equal(await normalizeResponse(original), original);
   assert.equal(original.bodyUsed, false);
+});
+
+test('a 429 whose body names its reset time is handed back with Retry-After', async () => {
+  const limited = new Response(JSON.stringify({ error: { message: 'Free usage limit reached', providerRetryAfterMs: 50_000 } }),
+    { status: 429, headers: { 'content-type': 'application/json' } });
+  const out = await withRetryAfter(limited);
+  assert.equal(out.status, 429);
+  assert.equal(out.headers.get('retry-after'), '50');
+  assert.match(await out.text(), /Free usage limit reached/);
+});
+
+test('a 429 that already carries Retry-After, or names no time, passes on unchanged and unread', async () => {
+  const given = new Response('{}', { status: 429, headers: { 'retry-after': '30' } });
+  assert.equal(await withRetryAfter(given), given);
+  const none = new Response('{"error":{"message":"limited"}}', { status: 429 });
+  assert.equal(await withRetryAfter(none), none);
+  assert.equal(none.bodyUsed, false);
+  const ok = new Response('{}', { status: 200 });
+  assert.equal(await withRetryAfter(ok), ok);
 });
