@@ -142,14 +142,24 @@ function json(res, status, payload, headers = {}) {
 }
 
 /**
+ * The longest reset time this listener passes on. A free pool can name a wait of
+ * many hours (an anonymous daily allowance), and a gateway that trusts it goes
+ * quiet until then even though a shorter wait would have been served; an hour is
+ * what magpie trusts of a vendor's word anyway (gateway.longestWait), so nothing
+ * longer buys anything — it only delays the next try by the pool's recovery.
+ */
+const RETRY_AFTER_CAP_MS = 60 * 60_000
+
+/**
  * An error the way the OpenAI wire carries one, and when the lane named a
  * reset, its `Retry-After`: a caller such as magpie rests the provider for the
  * vendor's own time instead of its default. Milliseconds in, whole seconds
  * out as the header asks; anything that isn't a positive number is left off.
  */
 function openAiError(res, status, type, message, code = null, retryAfterMs = 0) {
-  const seconds = Number.isFinite(Number(retryAfterMs)) && Number(retryAfterMs) > 0
-    ? Math.max(1, Math.ceil(Number(retryAfterMs) / 1000)) : 0
+  const asked = Number.isFinite(Number(retryAfterMs)) && Number(retryAfterMs) > 0
+    ? Math.min(Math.trunc(Number(retryAfterMs)), RETRY_AFTER_CAP_MS) : 0
+  const seconds = asked > 0 ? Math.max(1, Math.ceil(asked / 1000)) : 0
   json(res, status, { error: { message, type, param: null, code } }, seconds === 0 ? {} : { 'retry-after': String(seconds) })
 }
 

@@ -467,7 +467,7 @@
     {
       "path": "src/forward.js",
       "originalSha256": "d99a72bd01989018d7264e93957089be76e874493268840909570ce0d7765882",
-      "sha256": "24c807105594b787ce3b0a3f2787281a0bfedc43122b09b0f8c68a93a1432a34",
+      "sha256": "0c7bd636703f000e248f71bddebb6c575f36d2cb1465b4967af3c952ec86a498",
       "reason": "Adopt upstream Responses sequence numbering and valid streamed tool-call deltas; hold the head of a chat stream briefly so a lane's refusal before its first token answers with its own status and Retry-After instead of an error frame in a 200."
     },
     {
