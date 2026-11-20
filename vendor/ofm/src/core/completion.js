@@ -171,7 +171,13 @@ export function foldForwardOutcome(outcome, chunk) {
     case 'usage': outcome.usage = toOpenAiUsage(chunk.usage); break
     case 'finish':
       if (chunk.reason?.kind === 'max-tokens') outcome.truncated = true
-      if (chunk.reason?.kind === 'error' || chunk.reason?.kind === 'aborted') outcome.error = chunk.reason.failure?.message
+      if (chunk.reason?.kind === 'error' || chunk.reason?.kind === 'aborted') {
+        outcome.error = chunk.reason.failure?.message
+        // The failure's own status and reset time travel with the outcome, so a
+        // listener can answer with the status the lane refused with (and its
+        // Retry-After) instead of an error frame inside a 200: forward.js.
+        if (chunk.reason.failure !== undefined) outcome.failure = chunk.reason.failure
+      }
       break
     default: break
   }

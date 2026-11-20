@@ -467,8 +467,8 @@
     {
       "path": "src/forward.js",
       "originalSha256": "d99a72bd01989018d7264e93957089be76e874493268840909570ce0d7765882",
-      "sha256": "1b6547ac806e7bb054290fcaf151a9240d641be121ccf29e9b4ce4a96acecc92",
-      "reason": "Adopt upstream Responses sequence numbering and valid streamed tool-call deltas."
+      "sha256": "24c807105594b787ce3b0a3f2787281a0bfedc43122b09b0f8c68a93a1432a34",
+      "reason": "Adopt upstream Responses sequence numbering and valid streamed tool-call deltas; hold the head of a chat stream briefly so a lane's refusal before its first token answers with its own status and Retry-After instead of an error frame in a 200."
     },
     {
       "path": "src/probe.js",
@@ -553,6 +553,12 @@
       "originalSha256": "163ee1de3d4d59ec48b044f8545cfab91d395db2135845603d2657c1ceed0ac0",
       "sha256": "f94ac6477f2fa6c231d2d7430331c1fa96bff4041d8f1b1d5ba7f126aaeda6fe",
       "reason": "Carry the listing prices through refresh and persist the priced-at-zero/priced-above-zero id sets so admission survives a restart."
+    },
+    {
+      "path": "src/core/completion.js",
+      "originalSha256": "cb9b4488a3dd7554e028392790e6ae915b92c51375704a41a3be6a22f77abc27",
+      "sha256": "7e1282dc355c2486321f1807b0304dd815f282c6ab89fbf52e98f90856f0f7e6",
+      "reason": "Carry the finish failure's status and reset time on the outcome, so a listener can answer with the status the lane refused with and its Retry-After (forward.js)."
     }
   ]
 }

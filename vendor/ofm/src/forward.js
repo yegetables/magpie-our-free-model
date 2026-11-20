@@ -135,14 +135,22 @@ async function readBody(req) {
   }
 }
 
-function json(res, status, payload) {
+function json(res, status, payload, headers = {}) {
   const body = JSON.stringify(payload)
-  res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'cache-control': 'no-store' })
+  res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'cache-control': 'no-store', ...headers })
   res.end(body)
 }
 
-function openAiError(res, status, type, message, code = null) {
-  json(res, status, { error: { message, type, param: null, code } })
+/**
+ * An error the way the OpenAI wire carries one, and when the lane named a
+ * reset, its `Retry-After`: a caller such as magpie rests the provider for the
+ * vendor's own time instead of its default. Milliseconds in, whole seconds
+ * out as the header asks; anything that isn't a positive number is left off.
+ */
+function openAiError(res, status, type, message, code = null, retryAfterMs = 0) {
+  const seconds = Number.isFinite(Number(retryAfterMs)) && Number(retryAfterMs) > 0
+    ? Math.max(1, Math.ceil(Number(retryAfterMs) / 1000)) : 0
+  json(res, status, { error: { message, type, param: null, code } }, seconds === 0 ? {} : { 'retry-after': String(seconds) })
 }
 
 /**
@@ -311,7 +319,7 @@ export async function startForwardServer({ config, complete, modelRows, log = ()
       if (!res.headersSent) {
         const status = Number(error?.statusCode)
         const code = Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500
-        openAiError(res, code, code === 500 ? 'server_error' : 'invalid_request_error', String(error?.message ?? error))
+        openAiError(res, code, code === 500 ? 'server_error' : 'invalid_request_error', String(error?.message ?? error), null, error?.providerRetryAfterMs)
       } else {
         res.end()
       }
@@ -786,6 +794,9 @@ async function chatCompletions(req, res, complete, options = {}) {
   const id = `chatcmpl-${crypto.randomBytes(8).toString('hex')}`
   const created = Math.floor(Date.now() / 1000)
   const wantsStream = body.stream === true
+  // How long the head of a stream is held for a refusal to answer with its
+  // own status (see below): a lane that refuses takes a moment, not a minute.
+  const headWaitMs = 8_000
   // The trailing "(level)" rung is this plugin's own convention for thinking
   // budgets; honor it for callers that speak the spelling the picker uses,
   // without overriding an explicit `reasoning_effort`.
@@ -822,21 +833,38 @@ async function chatCompletions(req, res, complete, options = {}) {
     return
   }
 
-  openStreamHeaders(res, options.heartbeatMs)
-  sendSse(res, { id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] })
+  // The stream's head is held until there is something to say: a lane that
+  // refuses the turn before its first token can then answer with the status it
+  // refused with (a 429 and its Retry-After) instead of a 200 whose only
+  // content is an error frame. A slow lane still opens it after headWaitMs, so
+  // the heartbeat and the client's own first-byte patience work as before.
+  let opened = false
+  let headTimer
+  const open = () => {
+    if (opened || res.destroyed || res.writableEnded || res.headersSent) return
+    opened = true
+    clearTimeout(headTimer)
+    openStreamHeaders(res, options.heartbeatMs)
+    sendSse(res, { id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] })
+  }
+  headTimer = setTimeout(open, headWaitMs)
+  headTimer.unref?.()
   const outcome = await complete({ model, openAi: body }, (chunk) => {
     if (res.destroyed) return
     if (chunk.type === 'text-delta') {
+      open()
       sendSse(res, { id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { content: chunk.text }, finish_reason: null }] })
       return
     }
     if (chunk.type === 'reasoning-delta') {
+      open()
       sendSse(res, { id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { reasoning: chunk.text }, finish_reason: null }] })
       return
     }
     if (chunk.type === 'tool-call-delta') {
       const action = tools.admit(chunk)
       if (action.kind === 'drop') return
+      open()
         if (action.first) sendSse(res, {
           id, object: 'chat.completion.chunk', created, model,
           choices: [{ index: 0, delta: { tool_calls: [{
@@ -853,6 +881,18 @@ async function chatCompletions(req, res, complete, options = {}) {
       sendSse(res, { id, object: 'chat.completion.chunk', created, model, choices: [], usage: toOpenAiUsage(chunk.usage) })
     }
   })
+  // Nothing has gone out yet: the refusal still gets its own status line.
+  if (outcome.error !== undefined && !opened) {
+    // Nothing has gone out yet, so the refusal still gets its own status line
+    // and the lane's reset time, which is what a gateway retries on.
+    clearTimeout(headTimer)
+    const failure = outcome.failure ?? {}
+    const status = Number.isInteger(failure.status) && failure.status >= 400 && failure.status <= 599
+      ? failure.status
+      : failure.code === 'RATE_LIMIT' ? 429 : 502
+    openAiError(res, status, status === 429 ? 'rate_limit_error' : 'server_error', String(outcome.error), null, failure.providerRetryAfterMs)
+    return
+  }
   if (outcome.error !== undefined) {
     // The status line went out with the first SSE header, so 200 is already spent
     // — but a turn the lane refused must still say so. Answering a refusal with a
